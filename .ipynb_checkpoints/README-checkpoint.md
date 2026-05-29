@@ -44,7 +44,9 @@ Minimal working example for a **single CW injection**. The script:
 4. Produces a Mollweide sky map of the statistic
 
 ### `run_multiple_GPU_Fe_statistics.py` — batch of injections
-Extended script for running the Fe-statistic over **multiple injections in a single vmapped pass**. The script:
+Extended script for running the Fe-statistic over **multiple injections in a single vmapped pass**.
+You can produce 100k maps with a chunck size of 2000 maps in 3 minutes and 30 seconds on a single GPU.
+The script:
 1. Loads a set of pulsars
 2. Generates N injections with randomised sky position and orientation via `generate_residual_samples_vmap`
 3. Computes Fe-statistic maps for all injections at once via `GPU_FeStat.compute_Fe_batch`
