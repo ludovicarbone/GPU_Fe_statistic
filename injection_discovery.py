@@ -47,6 +47,7 @@ def makedelay_binary(evolve=True, pulsterm=False):
         # --- Frequency evolution: Earth term ---
         coef  = (256.0/5.0) * mc53 * w0_83
         omega = w0 * (1.0 - coef * toas)**(-3.0/8.0)
+
         phase = phi_earth + (1.0/32.0) / mc53 * (w0_m53 - omega**(-5.0/3.0))
 
         # --- Waveform amplitudes: Earth term ---
@@ -101,9 +102,10 @@ def makemodel_cgw(psrs, cwcommon, orf=ds.hd_orf, pulsterm=False, background=Fals
     cgw_delay = makedelay_binary(pulsterm=pulsterm)
 
     pslmodels = []
-    tspan = ds.getspan(psrs)
+   
 
     for p in psrs:
+        tspan = ds.getspan(p)
         model = [p.residuals,
                  ds.makenoise_measurement(p, p.noisedict, tnequad=True),
                  ds.makegp_timing(p, svd=True, variance=1e-40),
