@@ -111,18 +111,19 @@ def makemodel_cgw(psrs, cwcommon, orf=ds.hd_orf, pulsterm=False, background=Fals
                  ds.makegp_timing(p, svd=True, variance=1e-40),
                  ds.makedelay(p, cgw_delay, name='cw', common=cwcommon)]
 
-        if p.noisedict.get(p.name + '_dm_gp_components', 0):
-            model.append(ds.makegp_fourier(p, ds.powerlaw, p.noisedict[p.name + '_dm_gp_components'],
-                                           T=ds.getspan(p), name='dm_gp',
-                                           fourierbasis=ds.make_dmfourierbasis(alpha=2.0, tndm=True)))
+        #if p.noisedict.get(p.name + '_dm_gp_components', 0):
+        #    model.append(ds.makegp_fourier(p, ds.powerlaw, p.noisedict[p.name + '_dm_gp_components'],
+       #                                    T=ds.getspan(p), name='dm_gp',
+       #                                    fourierbasis=ds.make_dmfourierbasis(alpha=2.0, tndm=True)))
 
-        if p.noisedict.get(p.name + '_red_components', 0):
-            model.append(ds.makegp_fourier(p, ds.powerlaw, p.noisedict[p.name + '_red_components'],
-                                           T=tspan, name='red_noise'))
+       # if p.noisedict.get(p.name + '_red_components', 0):
+       #     model.append(ds.makegp_fourier(p, ds.powerlaw, p.noisedict[p.name + '_red_components'],
+                                       #    T=tspan, name='red_noise'))
 
         pslmodels.append(ds.PulsarLikelihood(model))
 
     if background:
+        print('ciao')
         return ds.GlobalLikelihood(
             psls=pslmodels,
             globalgp=ds.makegp_fourier_global(psrs, ds.powerlaw, orf,
