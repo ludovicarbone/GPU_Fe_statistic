@@ -4,6 +4,14 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def compute_tref(psrs):
+    """
+    Data-centered reference epoch (seconds): mean over all TOAs of all pulsars.
+    MUST match the tref used by the injection (injection_discovery.compute_tref).
+    """
+    return float(np.mean(np.concatenate([np.asarray(p.toas) for p in psrs])))
+
+
 def fpc_fast(pos, gwtheta, gwphi):
     """
     Antenna pattern functions in jax.
@@ -125,7 +133,7 @@ def build_per_pulsar_white_noise(psrs, lik=None):
 
 # ── Template and data inner products ──────────────────────────────────────────
 
-def get_template_inner_products(psrs, f0, per_psr_noise):
+def get_template_inner_products(psrs, f0, per_psr_noise, tref=None):
     """
     Computes the 3 inner products that depend ONLY on the sinusoidal templates.
 
@@ -134,7 +142,8 @@ def get_template_inner_products(psrs, f0, per_psr_noise):
     :param per_psr_noise: list of (T, Sigma, Ni_diag)
     :return:              array shape (n_psr, 3) with columns [sNs, cNc, sNc]
     """
-    tref    = 53000 * 86400
+    if tref is None:
+        tref = compute_tref(psrs)
     results = []
 
     for psr, (T_tot, Sigma, Ni_diag) in zip(psrs, per_psr_noise):
@@ -151,7 +160,7 @@ def get_template_inner_products(psrs, f0, per_psr_noise):
     return jnp.stack(results)
 
 
-def get_data_inner_products(psrs, f0, per_psr_noise):
+def get_data_inner_products(psrs, f0, per_psr_noise, tref=None):
     """
     Computes the 2 inner products that depend on the observed residuals.
 
@@ -160,7 +169,8 @@ def get_data_inner_products(psrs, f0, per_psr_noise):
     :param per_psr_noise: list of (T, Sigma, Ni_diag)
     :return:              array shape (n_psr, 2) with columns [resNs, resNc]
     """
-    tref    = 53000 * 86400
+    if tref is None:
+        tref = compute_tref(psrs)
     results = []
 
     for psr, (T_tot, Sigma, Ni_diag) in zip(psrs, per_psr_noise):
@@ -177,7 +187,7 @@ def get_data_inner_products(psrs, f0, per_psr_noise):
     return jnp.stack(results)
 
 
-def get_data_inner_products_from_residuals(residuals, psrs, f0, per_psr_noise):
+def get_data_inner_products_from_residuals(residuals, psrs, f0, per_psr_noise, tref=None):
     """
     Like get_data_inner_products but takes explicit residual arrays
     instead of reading psr.residuals.
@@ -188,7 +198,8 @@ def get_data_inner_products_from_residuals(residuals, psrs, f0, per_psr_noise):
     :param per_psr_noise: list of (T, Sigma, Ni_diag)
     :return:              array shape (n_psr, 2) with columns [resNs, resNc]
     """
-    tref    = 53000 * 86400
+    if tref is None:
+        tref = compute_tref(psrs)
     results = []
 
     for i, (psr, (T_tot, Sigma, Ni_diag)) in enumerate(zip(psrs, per_psr_noise)):
@@ -226,7 +237,7 @@ def build_N_vector(data_ips):
 
 class GPU_FeStat(object):
 
-    def __init__(self, psrs, lik=None, params=None, n_crn=60):
+    def __init__(self, psrs, lik=None, params=None, n_crn=60, tref=None):
         """
         :param psrs:   list of pulsars
         :param lik:    GlobalLikelihood from discovery (with background).
@@ -238,6 +249,8 @@ class GPU_FeStat(object):
         """
         print('Initializing the model...')
         self.psrs   = psrs
+        self.tref   = compute_tref(psrs) if tref is None else tref
+        print(f'Using tref = {self.tref:.6e} s')
         self.lik    = lik
         self.params = params
         self.n_crn  = n_crn
@@ -273,7 +286,7 @@ class GPU_FeStat(object):
 
     def precompute_M(self, f0):
         print(f'Precomputing M matrix for f0={f0:.2e} Hz...')
-        template_ips  = get_template_inner_products(self.psrs, f0, self._per_psr_noise)
+        template_ips  = get_template_inner_products(self.psrs, f0, self._per_psr_noise, self.tref)
         self._M_cache = build_M_matrix(template_ips)
         self._M_f0    = f0
         return self._M_cache
@@ -297,7 +310,7 @@ class GPU_FeStat(object):
                 print(f'f0 changed ({self._M_f0:.2e} -> {f0:.2e} Hz): recomputing M...')
             M = self.precompute_M(f0)
 
-        data_ips = get_data_inner_products(self.psrs, f0, self._per_psr_noise)
+        data_ips = get_data_inner_products(self.psrs, f0, self._per_psr_noise, self.tref)
         N        = build_N_vector(data_ips)
 
         if psr_theta_phi is not None:
@@ -351,6 +364,7 @@ class GPU_FeStat(object):
         fe_maps : jax array shape (N, n_sky)
         """
         return _compute_Fe_batch_impl(
+            tref            = self.tref,
             residuals_batch = residuals_batch,
             psrs            = self.psrs,
             pos             = self.pos,
@@ -364,7 +378,7 @@ class GPU_FeStat(object):
 # ── Batch implementation ─────────────────────────────────────────────────────
 
 def _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
-                           per_psr_noise, f0, gw_skyloc):
+                           per_psr_noise, f0, gw_skyloc, tref=None):
     """
     Core vmapped implementation.  Uses per_psr_noise (which already encodes
     whether the background is on or off) so the logic is identical for both
@@ -372,11 +386,13 @@ def _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
     """
 
     # ── M matrix: computed once ───────────────────────────────────────────────
-    template_ips = get_template_inner_products(psrs, f0, per_psr_noise)
+    if tref is None:
+        tref = compute_tref(psrs)
+
+    template_ips = get_template_inner_products(psrs, f0, per_psr_noise, tref)
     M = build_M_matrix(template_ips)
 
     # ── Pre-extract per-pulsar arrays for the vmap closure ────────────────────
-    tref = 53000 * 86400
     sines, cosines = [], []
     T_list, Sigma_list, Ni_list = [], [], []
 
@@ -432,7 +448,7 @@ def _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
 
 
 def compute_Fe_batch(residuals_batch, psrs, f0, gw_skyloc,
-                     lik=None, params=None, n_crn=60):
+                     lik=None, params=None, n_crn=60, tref=None):
     """
     Standalone convenience wrapper — no GPU_FeStat instance needed.
 
@@ -452,11 +468,11 @@ def compute_Fe_batch(residuals_batch, psrs, f0, gw_skyloc,
         per_psr_noise = build_per_pulsar_white_noise(psrs, lik)
 
     return _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
-                                  per_psr_noise, f0, gw_skyloc)
+                                  per_psr_noise, f0, gw_skyloc, tref)
 
 
 def compute_Fe_from_residuals(residuals, psrs, f0, gw_skyloc,
-                              lik=None, params=None, n_crn=60):
+                              lik=None, params=None, n_crn=60, tref=None):
     """
     One-shot Fe-statistic from explicit residual arrays (no GPU_FeStat needed).
     """
@@ -472,10 +488,13 @@ def compute_Fe_from_residuals(residuals, psrs, f0, gw_skyloc,
     else:
         per_psr_noise = build_per_pulsar_white_noise(psrs, lik)
 
-    template_ips = get_template_inner_products(psrs, f0, per_psr_noise)
+    if tref is None:
+        tref = compute_tref(psrs)
+
+    template_ips = get_template_inner_products(psrs, f0, per_psr_noise, tref)
     M = build_M_matrix(template_ips)
 
-    data_ips = get_data_inner_products_from_residuals(residuals, psrs, f0, per_psr_noise)
+    data_ips = get_data_inner_products_from_residuals(residuals, psrs, f0, per_psr_noise, tref)
     N = build_N_vector(data_ips)
 
     def fstat_one_sky(gw_pos):
