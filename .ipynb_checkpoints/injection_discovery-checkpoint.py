@@ -101,7 +101,7 @@ def makedelay_binary(evolve=True, pulsterm=False, tref=0.0):
 
             phase_p = (phi_earth + phi_psr
                        + (1.0/32.0) / mc53
-                       * (omega_p0**(-5.0/3.0) - omega_p**(-5.0/3.0)))
+                       * (w0**(-5.0/3.0) - omega_p**(-5.0/3.0)))
 
             At_p    = -0.5 * jnp.sin(2*phase_p) * (3.0 + jnp.cos(2*inc))
             Bt_p    =  2.0 * jnp.cos(2*phase_p) * jnp.cos(inc)

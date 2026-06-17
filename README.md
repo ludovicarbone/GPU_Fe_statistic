@@ -40,6 +40,20 @@ fstatz = fstat.compute_Fe(f0, skyloc)
 
 The result `fstatz` contains the Fe-statistic evaluated at each sky location.
 
+> **Note on the white-noise mode.** `GPU_FeStat(psrs)` with no `lik` falls back
+> to raw TOA errors (`toaerrs`), which is correct only for idealised simulations
+> where EFAC/EQUAD are negligible. For real data, build a white-noise likelihood
+> and pass it so the Fe-statistic uses the same EFAC/EQUAD-corrected noise as the
+> injection:
+> ```python
+> inj_model_wn = makemodel_cgw(psrs, cwcommon, background=False)
+> fstat = GPU_FeStat(psrs, lik=inj_model_wn)
+> ```
+> A reference epoch `tref` (default: mean of all TOAs) is shared between
+> injection, SNR calibration and recovery; pass `tref=...` explicitly to all
+> three if you override the default.
+
+
 ---
 
 # Background Marginalisation

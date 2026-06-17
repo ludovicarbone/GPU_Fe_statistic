@@ -64,9 +64,11 @@ def generate_residual_samples_vmap(
         'cw_log10_Mc': log10_Mc,
     }
 
-    # Dummy pulsar distance (1 kpc) — only the Earth term is injected
+    # Dummy pulsar distance (1 kpc) — only the Earth term is injected.
+    # phi_psr must be present per-pulsar (discovery maps it by name); 0 = coherent.
     for p in d_psrs:
-        fixed_cw[f'{p.name}_cw_d_psr'] = 1.0
+        fixed_cw[f'{p.name}_cw_d_psr']   = 1.0
+        fixed_cw[f'{p.name}_cw_phi_psr'] = 0.0
 
     # Noise parameters
     noise_params = {}
