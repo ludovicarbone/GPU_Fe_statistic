@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import healpy as hp
 import discovery as ds
 
-from injection_discovery import run_injection, makemodel_cgw
+from injection_discovery import run_injection
 from GPU_Fe_statistics import GPU_FeStat
 
 # ── Load the pulsars ──────────────────────────────────────────────────────────
@@ -58,13 +58,13 @@ f0 = 10**log10_f0
 
 if background:
     # Pass the likelihood + background params → CRN marginalised
-    fstat = GPU_FeStat(d_psrs, lik=inj_model, params=bg_params, n_crn=60)
+    fstat = GPU_FeStat(d_psrs, lik=inj_model, params=bg_params)
 else:
-    # White noise + timing model only.
-    # Pass a white-noise likelihood so the Fe-stat uses the SAME EFAC/EQUAD
-    # noise (and timing basis) as the injection, instead of raw toaerrs.
-    inj_model_wn = makemodel_cgw(d_psrs, cwcommon, pulsterm=False, background=False)
-    fstat = GPU_FeStat(d_psrs, lik=inj_model_wn)
+    # White noise + timing model only. A likelihood is still required: the Fe
+    # noise model must match the injection, so it uses the SAME EFAC/EQUAD noise
+    # and the same SVD timing basis instead of raw toaerrs. With background=False
+    # inj_model is already exactly that white-noise model, so reuse it.
+    fstat = GPU_FeStat(d_psrs, lik=inj_model)
 
 fstat.precompute_M(f0)
 

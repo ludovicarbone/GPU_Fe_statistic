@@ -64,10 +64,11 @@ def generate_residual_samples_vmap(
         'cw_log10_Mc': log10_Mc,
     }
 
-    # Dummy pulsar distance (1 kpc) — only the Earth term is injected.
+    # Pulsar-distance offset — only the Earth term is injected (pulsterm=False),
+    # so d_psr is unused; keep it at 0.0 to match run_injection().
     # phi_psr must be present per-pulsar (discovery maps it by name); 0 = coherent.
     for p in d_psrs:
-        fixed_cw[f'{p.name}_cw_d_psr']   = 1.0
+        fixed_cw[f'{p.name}_cw_d_psr']   = 0.0
         fixed_cw[f'{p.name}_cw_phi_psr'] = 0.0
 
     # Noise parameters
@@ -161,9 +162,13 @@ skyloc  = np.array(hp.pix2ang(nside, np.arange(nskyloc)))
 f0 = 10**(-8.3)
 
 if background:
-    fstat = GPU_FeStat(d_psrs, lik=inj_model, params=bg_params, n_crn=60)
+    # Pass the likelihood + background params → CRN marginalised
+    fstat = GPU_FeStat(d_psrs, lik=inj_model, params=bg_params)
 else:
-    fstat = GPU_FeStat(d_psrs)
+    # White noise + timing model only. A likelihood is still required: the Fe
+    # noise model must match the injection, so it uses the same EFAC/EQUAD and
+    # the same SVD timing basis instead of raw toaerrs.
+    fstat = GPU_FeStat(d_psrs, lik=inj_model)
 
 start = time.time()
 all_fe_maps = jnp.concatenate(

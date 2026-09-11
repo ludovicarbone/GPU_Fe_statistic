@@ -2,6 +2,7 @@ import os
 import jax
 import jax.numpy as jnp
 import numpy as np
+from per_pulsar_noise import build_per_pulsar_noise
 
 
 def compute_tref(psrs):
@@ -40,95 +41,34 @@ def fpc_fast(pos, gwtheta, gwphi):
 @jax.jit
 def inner_product_jax(x, y, Ni_diag, T, Sigma):
     """
-    Computes the inner product with marginalisation over timing model + GP background.
+    Computes the inner product with marginalisation over timing model + GP noise.
 
-    (x|y) = x^T N^{-1} y  -  (T^T N^{-1} x)^T  Sigma^{-1}  (T^T N^{-1} y)
+        (x|y) = x^T N^{-1} y  -  (T^T N^{-1} x)^T  Sigma^{-1}  (T^T N^{-1} y)
 
-    where Sigma = T^T N^{-1} T + Phi^{-1} includes both timing model and
-    (optionally) CRN.
+    where Sigma = T^T N^{-1} T + Phi^{-1} includes the timing model and,
+    optionally, per-pulsar GPs (red noise, DM) and the CRN background. All the
+    block structure is encoded upstream in (T, Sigma) by build_per_pulsar_noise;
+    this routine is agnostic to which components are present.
 
-    When background=False the caller simply passes T = Mmat and
-    Sigma = Mmat^T N^{-1} Mmat, reproducing the original white-noise behaviour.
+    NOTE: the linear system is solved with jnp.linalg.solve, NOT lstsq. With
+    lstsq(rcond) the singular values of an ill-conditioned Sigma (e.g. the raw
+    Mmat basis, cond ~ 1e42) get truncated, leaving timing-model power in the
+    statistic and inflating the Fe at low frequency bins. build_per_pulsar_noise
+    uses the orthonormal SVD timing basis (cond ~ 1), so solve is both correct
+    and well-posed here.
 
     :param x:       timeseries vector, shape (ntoa,)
     :param y:       timeseries vector, shape (ntoa,)
     :param Ni_diag: diagonal of N^{-1} = 1/toaerrs^2, shape (ntoa,)
-    :param T:       basis matrix [T_tm | F_crn] or just Mmat, shape (ntoa, n_basis)
+    :param T:       basis matrix [T_tm | F_gp | F_crn], shape (ntoa, n_basis)
     :param Sigma:   T^T N^{-1} T + Phi^{-1}, shape (n_basis, n_basis)
     :return:        scalar inner product (x|y)
     """
     xNy = jnp.dot(x, Ni_diag * y)
     TNx = jnp.dot(T.T, Ni_diag * x)
     TNy = jnp.dot(T.T, Ni_diag * y)
-    solution, _, _, _ = jnp.linalg.lstsq(Sigma, TNy, rcond=1e-10)
+    solution = jnp.linalg.solve(Sigma, TNy)
     return xNy - jnp.dot(TNx, solution)
-
-
-# ── Per-pulsar Sigma construction (background ON) ────────────────────────────
-
-def build_per_pulsar_sigma(lik, params, n_crn=60):
-    """
-    Builds per-pulsar (T_tot, Sigma, Ni_diag) including timing model + CRN
-    (block-diagonal approximation of the full cross-correlated Phi_inv).
-
-    :param lik:    GlobalLikelihood with background (discovery)
-    :param params: dict with background parameters
-    :param n_crn:  number of CRN basis functions per pulsar (default 60)
-    :return:       list of (T_tot, Sigma, Ni_diag) tuples, one per pulsar
-    """
-    n_psr = len(lik.psls)
-
-    P_var_inv    = lik.globalgp.Phi_inv or lik.globalgp.Phi.make_inv()
-    Pinv_crn, _  = P_var_inv(params)
-
-    results = []
-    for i, psl in enumerate(lik.psls):
-        Ni_diag = 1.0 / jnp.array(psl.N.N.N)
-
-        F_tm  = jnp.array(psl.N.F)
-        F_crn = jnp.array(lik.globalgp.Fs[i])
-
-        T_tot = jnp.concatenate([F_tm, F_crn], axis=1)
-
-        FtNmF = jnp.dot(T_tot.T * Ni_diag[None, :], T_tot)
-
-        Phi_inv_tm = jnp.diag(jnp.array(psl.N.P.N))
-
-        Phi_inv_crn_ii = jnp.array(
-            Pinv_crn[i * n_crn:(i + 1) * n_crn,
-                     i * n_crn:(i + 1) * n_crn]
-        )
-
-        n_tm    = F_tm.shape[1]
-        Phi_inv = jnp.zeros((n_tm + n_crn, n_tm + n_crn))
-        Phi_inv = Phi_inv.at[:n_tm, :n_tm].set(Phi_inv_tm)
-        Phi_inv = Phi_inv.at[n_tm:, n_tm:].set(Phi_inv_crn_ii)
-
-        Sigma = FtNmF + Phi_inv
-
-        results.append((T_tot, Sigma, Ni_diag))
-
-    return results
-
-
-# ── Per-pulsar noise for white-noise-only mode ───────────────────────────────
-
-def build_per_pulsar_white_noise(psrs, lik=None):
-    """
-    Builds per-pulsar (T, Sigma, Ni_diag) using only the timing design matrix
-    and white noise — no background GP.
-
-    :param psrs: list of pulsars
-    :return:     list of (T, Sigma, Ni_diag) tuples
-    """
-    results = []
-    for i, psr in enumerate(psrs):
-        T       = jnp.array(psr.Mmat)
-        #Ni_diag = 1.0 / jnp.array(psr.toaerrs) ** 2 #this is okay only for simulations in which efac and equad are not influencing anything
-        Ni_diag = 1.0 / jnp.array(lik.psls[i].N.N.N) 
-        Sigma   = jnp.dot(T.T * Ni_diag[None, :], T)
-        results.append((T, Sigma, Ni_diag))
-    return results
 
 
 # ── Template and data inner products ──────────────────────────────────────────
@@ -240,12 +180,17 @@ class GPU_FeStat(object):
     def __init__(self, psrs, lik=None, params=None, n_crn=60, tref=None):
         """
         :param psrs:   list of pulsars
-        :param lik:    GlobalLikelihood from discovery (with background).
-                       If None or if lik.globalgp is None, falls back to
-                       white noise + timing model only.
-        :param params: dict of background parameters,
-                       e.g. {'crn_log10_A': -15, 'crn_gamma': 4.33}
-        :param n_crn:  CRN basis functions per pulsar (default 60)
+        :param lik:    GlobalLikelihood from discovery. The Fe noise model MUST
+                       match the one used for the injection. If it carries a
+                       globalgp and params are given, the CRN is marginalised;
+                       if it carries per-pulsar GPs (red noise / DM), those are
+                       marginalised too. Otherwise only white noise + timing.
+        :param params: dict of noise parameters. Required whenever lik contains
+                       a CRN background or per-pulsar GPs (build_per_pulsar_noise
+                       raises if it is missing, instead of silently dropping the
+                       block).
+        :param n_crn:  kept for backward compatibility; the CRN block offsets are
+                       now inferred from globalgp.Fs shapes and n_crn is unused.
         """
         print('Initializing the model...')
         self.psrs   = psrs
@@ -260,29 +205,23 @@ class GPU_FeStat(object):
         self._M_cache  = None
         self._M_f0     = None
 
-        # ── CHANGED: guard also on lik.globalgp being not None ────────────
-        has_background = (lik is not None
-                          and params is not None
-                          and getattr(lik, 'globalgp', None) is not None)
+        if lik is None:
+            raise ValueError('GPU_FeStat richiede una likelihood: il modello '
+                             'di rumore della Fe deve coincidere con quello '
+                             'usato per l iniezione.')
 
-        if has_background:
-            print('Building per-pulsar Sigma matrices (timing + CRN)...')
-            self._per_psr_noise = build_per_pulsar_sigma(lik, params, n_crn=n_crn)
-        else:
-            print('No background: using white noise + timing model only.')
-            self._per_psr_noise = build_per_pulsar_white_noise(psrs, lik)
+        print('Building per-pulsar Sigma matrices...')
+        self._per_psr_noise = build_per_pulsar_noise(lik, params)
 
     def update_params(self, params):
         """
-        Recompute Sigma matrices when background parameters change.
-        Also invalidates the M cache.
+        Recompute Sigma matrices when noise parameters change (CRN and/or
+        per-pulsar red noise / DM). Also invalidates the M cache.
         """
         self.params = params
-        if self.lik is not None and getattr(self.lik, 'globalgp', None) is not None:
-            print('Updating per-pulsar Sigma matrices...')
-            self._per_psr_noise = build_per_pulsar_sigma(self.lik, params, n_crn=self.n_crn)
-            self._M_cache = None
-            self._M_f0    = None
+        self._per_psr_noise = build_per_pulsar_noise(self.lik, params)
+        self._M_cache = None
+        self._M_f0    = None
 
     def precompute_M(self, f0):
         print(f'Precomputing M matrix for f0={f0:.2e} Hz...')
@@ -381,8 +320,8 @@ def _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
                            per_psr_noise, f0, gw_skyloc, tref=None):
     """
     Core vmapped implementation.  Uses per_psr_noise (which already encodes
-    whether the background is on or off) so the logic is identical for both
-    modes.
+    which noise components are present) so the logic is identical for every
+    mode: white-only, CRN background, per-pulsar red noise / DM, or any mix.
     """
 
     # ── M matrix: computed once ───────────────────────────────────────────────
@@ -447,25 +386,24 @@ def _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
     return all_fe_maps(N_vecs)
 
 
+# ── Standalone convenience wrappers (no GPU_FeStat instance needed) ───────────
+
 def compute_Fe_batch(residuals_batch, psrs, f0, gw_skyloc,
                      lik=None, params=None, n_crn=60, tref=None):
     """
-    Standalone convenience wrapper — no GPU_FeStat instance needed.
-
-    When lik and params are given the CRN background is marginalised;
-    otherwise only white noise + timing model are used.
+    Standalone wrapper. The noise model is built by build_per_pulsar_noise from
+    lik, so it handles white-only, CRN, and per-pulsar GP modes identically to
+    GPU_FeStat. lik is required (the Fe noise model must match the injection).
     """
+    if lik is None:
+        raise ValueError('compute_Fe_batch richiede una likelihood: il modello '
+                         'di rumore della Fe deve coincidere con quello usato '
+                         'per l iniezione.')
+
     pos      = jnp.array([psr.pos for psr in psrs])
     fpc_psrs = jax.vmap(fpc_fast, in_axes=(0, None, None))
 
-    has_background = (lik is not None
-                      and params is not None
-                      and getattr(lik, 'globalgp', None) is not None)
-
-    if has_background:
-        per_psr_noise = build_per_pulsar_sigma(lik, params, n_crn=n_crn)
-    else:
-        per_psr_noise = build_per_pulsar_white_noise(psrs, lik)
+    per_psr_noise = build_per_pulsar_noise(lik, params)
 
     return _compute_Fe_batch_impl(residuals_batch, psrs, pos, fpc_psrs,
                                   per_psr_noise, f0, gw_skyloc, tref)
@@ -475,18 +413,17 @@ def compute_Fe_from_residuals(residuals, psrs, f0, gw_skyloc,
                               lik=None, params=None, n_crn=60, tref=None):
     """
     One-shot Fe-statistic from explicit residual arrays (no GPU_FeStat needed).
+    Same noise handling as compute_Fe_batch.
     """
+    if lik is None:
+        raise ValueError('compute_Fe_from_residuals richiede una likelihood: il '
+                         'modello di rumore della Fe deve coincidere con quello '
+                         'usato per l iniezione.')
+
     pos      = jnp.array([psr.pos for psr in psrs])
     fpc_psrs = jax.vmap(fpc_fast, in_axes=(0, None, None))
 
-    has_background = (lik is not None
-                      and params is not None
-                      and getattr(lik, 'globalgp', None) is not None)
-
-    if has_background:
-        per_psr_noise = build_per_pulsar_sigma(lik, params, n_crn=n_crn)
-    else:
-        per_psr_noise = build_per_pulsar_white_noise(psrs, lik)
+    per_psr_noise = build_per_pulsar_noise(lik, params)
 
     if tref is None:
         tref = compute_tref(psrs)

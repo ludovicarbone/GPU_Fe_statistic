@@ -173,7 +173,7 @@ def run_injection(d_psrs, cwpars, cwcommon, pulsterm=False,
     cgw_params_inj = {}
     for psr in d_psrs:
         cgw_params_inj.update(psr.noisedict)
-        cgw_params_inj[psr.name + '_cw_d_psr']   = 1.0
+        cgw_params_inj[psr.name + '_cw_d_psr']   = 0.0
         cgw_params_inj[psr.name + '_cw_phi_psr'] = 0.0   # phi_psr per-pulsar = 0
     for name, par in zip(cwcommon, cwpars):
         cgw_params_inj[name] = par
