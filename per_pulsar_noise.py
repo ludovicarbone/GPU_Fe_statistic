@@ -8,7 +8,8 @@ combinazione:
   - rumore bianco (efac / equad)
   - timing model            -> marginalizzato (prior piatto)
   - GP per pulsar variabili -> rumore rosso, DM
-  - CRN globale             -> approssimazione a blocchi diagonali
+  - CRN globale             -> approssimazione a blocchi diagonali, con il
+                               prior MARGINALE di ciascun pulsar (Phi_ii)^-1
 
 La forma dell'inner product resta quella di inner_product_jax:
 
@@ -123,7 +124,13 @@ def build_per_pulsar_noise(lik, params=None, marginalize_timing=True,
     Phi^-1 = blocchi diagonali corrispondenti:
              timing  -> 0            (prior piatto, marginalizzazione)
              GP psr  -> P_var.make_inv()(params)
-             CRN     -> blocco i-esimo di globalgp.Phi_inv(params)
+             CRN     -> (Phi_ii)^-1, inversa del blocco i-esimo della Phi
+                        globale. NON il blocco i-esimo di Phi^-1: quello e la
+                        precisione del CRN nel pulsar i condizionata al CRN
+                        negli altri pulsar, (Phi^-1)_ii = (Gamma^-1)_ii phi^-1,
+                        e sottostima il CRN di un fattore (Gamma^-1)_ii >= 1
+                        (1.15-1.66 per EPTA DR2new). Poiche la Fe tratta i
+                        pulsar separatamente, il prior coerente e il marginale.
 
     :param lik:    GlobalLikelihood di discovery
     :param params: dict con i parametri di rumore (CRN e/o RN/DM per pulsar).
@@ -152,6 +159,8 @@ def build_per_pulsar_noise(lik, params=None, marginalize_timing=True,
         P_glob_inv = globalgp.Phi_inv or globalgp.Phi.make_inv()
         Pinv_crn, _ = P_glob_inv(params)
         crn_slices = crn_block_slices(globalgp)
+        # covarianza globale: serve il blocco marginale (Phi_ii)^-1, non (Phi^-1)_ii
+        Phi_crn = np.linalg.inv(np.asarray(Pinv_crn))
 
     results = []
     for i, psl in enumerate(lik.psls):
@@ -194,7 +203,7 @@ def build_per_pulsar_noise(lik, params=None, marginalize_timing=True,
             F_crn = jnp.asarray(globalgp.Fs[i])
             sl = crn_slices[i]
             blocks_F.append(F_crn)
-            blocks_Pinv.append(jnp.asarray(Pinv_crn[sl, sl]))
+            blocks_Pinv.append(jnp.asarray(np.linalg.inv(Phi_crn[sl, sl])))
             labels.append(f'crn({F_crn.shape[1]})')
 
         T_tot = jnp.concatenate(blocks_F, axis=1)
