@@ -32,7 +32,9 @@ def fpc_fast(pos, gwtheta, gwphi):
     fplus  = 0.5 * (m_dot_pos**2 - n_dot_pos**2) / denom
     fcross = (m_dot_pos * n_dot_pos) / denom
 
-    return fplus, fcross, omhat_dot_pos   # cosMu = omhat_dot_pos
+    # omhat = GW propagation direction = -n_hat (n_hat towards the source), so
+    # cosMu = n_hat . p_hat = -omhat_dot_pos  (as in enterprise create_gw_antenna_pattern)
+    return fplus, fcross, -omhat_dot_pos
 
 
 def makedelay_binary(evolve=True, pulsterm=False, tref=0.0):
@@ -65,7 +67,7 @@ def makedelay_binary(evolve=True, pulsterm=False, tref=0.0):
         f0 = 10.0**log10_f0
         dec, inc = jnp.arcsin(sindec), jnp.arccos(cosinc)
 
-        # Antenna pattern; cosMu = omhat_dot_pos
+        # Antenna pattern; cosMu = n_hat . p_hat = -omhat_dot_pos
         fplus, fcross, cosMu = fpc_fast(pos, 0.5 * jnp.pi - dec, ra)
 
         # Mass / frequency / distance
